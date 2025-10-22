@@ -1,0 +1,25 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "baseUrl": "./src",
+    "declaration": false,
+    "declarationMap": false,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "emitDeclarationOnly": false,
+    "paths": {
+      "@/*": ["./*"],
+      "@config/*": ["./config/*"],
+      "@modules/*": ["./modules/*"],
+      "@middleware/*": ["./middleware/*"],
+      "@routes/*": ["./routes/*"],
+      "@services/*": ["./services/*"],
+      "@utils/*": ["./utils/*"],
+      "@types/*": ["./types/*"]
+    }
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "tests"]
+}

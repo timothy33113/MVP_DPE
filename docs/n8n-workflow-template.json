@@ -1,0 +1,197 @@
+{
+  "name": "Enrichissement Leboncoin avec Claude - SLOW MODE",
+  "nodes": [
+    {
+      "name": "1. Récupérer annonces à enrichir",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [250, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/webhooks/batch-enrich",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "AqkAGV95jdFedL1SxT8CKBTO1MmDPULIuSJAIAaBHRo="
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "application/json",
+        "body": "{\"limit\": 50}",
+        "options": {}
+      }
+    },
+    {
+      "name": "2. Split en lots de 5",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [450, 300],
+      "parameters": {
+        "batchSize": 5,
+        "options": {}
+      }
+    },
+    {
+      "name": "3. Pause 3 secondes",
+      "type": "n8n-nodes-base.wait",
+      "position": [600, 300],
+      "parameters": {
+        "amount": 3,
+        "unit": "seconds"
+      }
+    },
+    {
+      "name": "4. Analyser avec Claude",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [750, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "application/json",
+        "body": "={\n  \"model\": \"claude-3-5-sonnet-20241022\",\n  \"max_tokens\": 500,\n  \"temperature\": 0.2,\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"Tu es un expert en analyse d'annonces immobilières. Ton rôle est d'analyser la description d'une annonce Leboncoin et d'extraire des informations précises sur l'état du bien et les équipements.\\n\\n# ANNONCE À ANALYSER\\n\\n**Type de bien**: {{ $json.type }}\\n**Surface**: {{ $json.surface }}m²\\n**Pièces**: {{ $json.pieces }}\\n**Prix**: {{ $json.prix }}€\\n\\n**Description complète**:\\n{{ $json.description }}\\n\\n---\\n\\n# INSTRUCTIONS\\n\\nAnalyse cette description et retourne UNIQUEMENT un objet JSON (sans markdown, sans explication) avec les champs suivants:\\n\\n## 1. État du bien (etat_bien)\\nDétermine l'état parmi ces 5 catégories EXACTES:\\n- \\\"neuf\\\": Construction neuve, jamais habité, livraison récente\\n- \\\"renove\\\": Entièrement rénové, refait à neuf, rénovation complète récente\\n- \\\"bon_etat\\\": Bon état général, bien entretenu, habitable sans travaux\\n- \\\"a_rafraichir\\\": Petits travaux à prévoir, rafraîchissement, peinture, quelques finitions\\n- \\\"travaux\\\": Gros travaux nécessaires, à rénover, gros chantier, rénovation importante\\n\\n## 2. Équipements (boolean)\\nDétecte la présence explicite de:\\n- **avec_balcon**: true si balcon mentionné\\n- **avec_terrasse**: true si terrasse mentionnée\\n- **avec_garage**: true si garage, box ou parking fermé mentionné\\n- **avec_cave**: true si cave ou cellier mentionné\\n- **avec_parking**: true si parking privatif ou place de parking\\n\\n## 3. Surface terrain (surface_terrain)\\nSi c'est une maison et qu'un terrain est mentionné, extrais la surface en m² (nombre uniquement)\\n\\n## 4. Détails des travaux (details_travaux)\\nSi des travaux sont mentionnés, liste-les de manière concise:\\n- Type de travaux (cuisine, sdb, toiture, etc.)\\n- Estimation de l'ampleur si mentionnée\\n- Budget travaux si indiqué\\n\\n## 5. Confiance (confiance)\\nTon niveau de confiance: \\\"high\\\", \\\"medium\\\", \\\"low\\\"\\n\\n---\\n\\n# RÈGLES IMPORTANTES\\n\\n1. **Sois précis**: Ne mets \\\"neuf\\\" que si explicitement mentionné\\n2. **Sois conservateur**: En cas de doute entre deux états, choisis le moins favorable\\n3. **Équipements**: true SEULEMENT si explicitement mentionné dans la description\\n4. **Surface terrain**: Uniquement pour maisons/villas, null pour appartements sauf terrasse avec surface\\n5. **Confiance**:\\n   - \\\"high\\\": Information explicite et claire\\n   - \\\"medium\\\": Déduction logique mais pas explicite\\n   - \\\"low\\\": Incertain, manque d'information\\n\\n---\\n\\n**RETOURNE UNIQUEMENT LE JSON, RIEN D'AUTRE.**\"\n    }\n  ]\n}",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "name": "5. Parser la réponse JSON",
+      "type": "n8n-nodes-base.code",
+      "position": [850, 300],
+      "parameters": {
+        "jsCode": "const response = $input.item.json.content[0].text;\nconst parsed = JSON.parse(response);\n\nreturn {\n  json: {\n    listId: $input.item.json.listId,\n    enrichissement: parsed\n  }\n};"
+      }
+    },
+    {
+      "name": "6. Envoyer l'enrichissement",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1050, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/webhooks/enrich-annonce",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "AqkAGV95jdFedL1SxT8CKBTO1MmDPULIuSJAIAaBHRo="
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "application/json",
+        "bodyParametersJson": "={{ $json }}",
+        "options": {}
+      }
+    },
+    {
+      "name": "7. Pause 2 secondes",
+      "type": "n8n-nodes-base.wait",
+      "position": [1200, 300],
+      "parameters": {
+        "amount": 2,
+        "unit": "seconds"
+      }
+    }
+  ],
+  "connections": {
+    "1. Récupérer annonces à enrichir": {
+      "main": [
+        [
+          {
+            "node": "2. Split en lots de 5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2. Split en lots de 5": {
+      "main": [
+        [
+          {
+            "node": "3. Pause 3 secondes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3. Pause 3 secondes": {
+      "main": [
+        [
+          {
+            "node": "4. Analyser avec Claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4. Analyser avec Claude": {
+      "main": [
+        [
+          {
+            "node": "5. Parser la réponse JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "5. Parser la réponse JSON": {
+      "main": [
+        [
+          {
+            "node": "6. Envoyer l'enrichissement",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "6. Envoyer l'enrichissement": {
+      "main": [
+        [
+          {
+            "node": "7. Pause 2 secondes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7. Pause 2 secondes": {
+      "main": [
+        [
+          {
+            "node": "2. Split en lots de 5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

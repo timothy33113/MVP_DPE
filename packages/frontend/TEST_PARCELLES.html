@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Parcelles Cadastrales</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        #map { height: 600px; }
+    </style>
+</head>
+<body>
+    <h1>Test d'affichage des parcelles cadastrales</h1>
+    <div id="map"></div>
+    <button onclick="loadParcelles()">Charger les parcelles</button>
+
+    <script>
+        // Initialiser la carte
+        const map = L.map('map').setView([43.295644, -0.436179], 18);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        let parcellesLayer = null;
+
+        async function loadParcelles() {
+            console.log('🔄 Chargement des parcelles...');
+
+            try {
+                const response = await fetch('http://localhost:3001/api/cadastre/address?adresse=5%20Allee%20de%20la%20Plante%2064230%20Sauvagnon');
+                const data = await response.json();
+
+                console.log('📊 Data:', data);
+
+                if (data.success && data.data.parcelles.length > 0) {
+                    const parcelles = data.data.parcelles;
+                    console.log('✅ Parcelles:', parcelles.length);
+
+                    // Supprimer l'ancien layer
+                    if (parcellesLayer) {
+                        map.removeLayer(parcellesLayer);
+                    }
+
+                    // Créer le GeoJSON
+                    const geojson = {
+                        type: 'FeatureCollection',
+                        features: parcelles
+                            .filter(p => p.geometry)
+                            .map(p => ({
+                                type: 'Feature',
+                                properties: {
+                                    section: p.section,
+                                    numero: p.numero,
+                                    contenance: p.contenance,
+                                    nomCommune: p.nomCommune
+                                },
+                                geometry: p.geometry
+                            }))
+                    };
+
+                    console.log('🗺️ GeoJSON:', geojson);
+
+                    // Ajouter à la carte
+                    parcellesLayer = L.geoJSON(geojson, {
+                        style: {
+                            fillColor: '#9ca3af',
+                            fillOpacity: 0.2,
+                            color: '#6b7280',
+                            weight: 2,
+                            opacity: 0.6
+                        },
+                        onEachFeature: (feature, layer) => {
+                            layer.on({
+                                mouseover: (e) => {
+                                    e.target.setStyle({
+                                        fillColor: '#10b981',
+                                        fillOpacity: 0.4,
+                                        color: '#059669',
+                                        weight: 3,
+                                        opacity: 1
+                                    });
+
+                                    const props = feature.properties;
+                                    layer.bindTooltip(
+                                        `${props.nomCommune} - Section ${props.section} N°${props.numero}<br/>Surface: ${props.contenance}m²`
+                                    ).openTooltip();
+                                },
+                                mouseout: (e) => {
+                                    e.target.setStyle({
+                                        fillColor: '#9ca3af',
+                                        fillOpacity: 0.2,
+                                        color: '#6b7280',
+                                        weight: 2,
+                                        opacity: 0.6
+                                    });
+                                    layer.closeTooltip();
+                                }
+                            });
+                        }
+                    }).addTo(map);
+
+                    // Zoomer sur les parcelles
+                    map.fitBounds(parcellesLayer.getBounds());
+
+                    console.log('✅ Parcelles affichées !');
+                } else {
+                    console.error('❌ Pas de parcelles');
+                }
+            } catch (error) {
+                console.error('❌ Erreur:', error);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,420 @@
+{
+  "name": "Workflow #11 - Matching Quotidien Acheteurs/Biens",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 9 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Cron - Chaque jour à 9h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/leads?type=eq.acheteur&statut=eq.actif&select=*",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "options": {}
+      },
+      "name": "Supabase - Fetch Acheteurs Actifs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filtre les acheteurs qui ont des critères définis\nconst items = $input.all();\nconst validBuyers = [];\n\nfor (const item of items) {\n  const buyer = item.json;\n  \n  // Vérifier que l'acheteur a au moins un budget_max défini\n  if (buyer.criteres_recherche && buyer.criteres_recherche.budget_max) {\n    validBuyers.push({ json: buyer });\n  } else {\n    console.log(`Buyer ${buyer.id} skipped - no search criteria`);\n  }\n}\n\nconsole.log(`Found ${validBuyers.length} valid buyers with criteria`);\n\nif (validBuyers.length === 0) {\n  return [{ json: { skip: true, message: 'Aucun acheteur avec critères définis' } }];\n}\n\nreturn validBuyers;"
+      },
+      "name": "Code - Filter Valid Buyers",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-buyers",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "IF - Has Valid Buyers?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/biens_inter_agence?statut_disponibilite=eq.disponible&criteres_enrichis=not.is.null&select=id,lbc_id,titre,prix,ville,surface,nb_pieces,type_bien,criteres_enrichis",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "options": {}
+      },
+      "name": "Supabase - Fetch Biens Enrichis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1130, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Regroupe tous les biens en un seul array pour le passer à l'Edge Function\nconst allBiens = $input.all();\nconst biensList = allBiens.map(item => item.json);\n\nconsole.log(`Prepared ${biensList.length} biens for matching`);\n\nreturn [{ json: { biens: biensList } }];"
+      },
+      "name": "Code - Prepare Biens Array",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1350, 200]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "buyer-data",
+              "name": "buyer",
+              "value": "={{ $json }}",
+              "type": "object"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Set - Store Buyer Context",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [1130, 400]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge buyer data with biens array\nconst buyerItems = $input.first();\nconst biensItems = $input.last();\n\nconst buyer = buyerItems.json;\nconst biens = biensItems.json.biens;\n\nconsole.log(`Merging buyer ${buyer.id} with ${biens.length} biens`);\n\nreturn [{\n  json: {\n    buyer_id: buyer.id,\n    buyer_email: buyer.email,\n    buyer_name: `${buyer.prenom} ${buyer.nom}`,\n    buyer_criteria: buyer.criteres_recherche,\n    properties: biens\n  }\n}];"
+      },
+      "name": "Code - Merge Buyer + Biens",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1570, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SUPABASE_URL}}/functions/v1/match-buyer-properties",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  buyer_id: $json.buyer_id,\n  buyer_criteria: $json.buyer_criteria,\n  properties: $json.properties\n}) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "name": "HTTP - Edge Function Matching IA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1790, 300],
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-matches",
+              "leftValue": "={{ $json.high_score_matches }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "IF - Has Good Matches?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2010, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prépare l'email avec les meilleurs matchs pour l'acheteur\nconst item = $input.first();\nconst matchings = item.json.matchings || [];\nconst buyerName = item.json.buyer_name || 'Cher client';\nconst buyerEmail = item.json.buyer_email;\n\n// Trier par score décroissant\nconst sortedMatchings = matchings.sort((a, b) => b.score - a.score);\n\n// Prendre top 5\nconst topMatchings = sortedMatchings.slice(0, 5);\n\n// Générer le HTML des biens\nconst biensHTML = topMatchings.map((m, idx) => {\n  const bien = item.json.properties.find(p => p.id === m.bien_id);\n  \n  return `\n    <div style=\"border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 8px;\">\n      <h3 style=\"margin-top: 0;\">#${idx + 1} - ${bien.titre} (Score: ${m.score}/100)</h3>\n      <p><strong>Prix :</strong> ${bien.prix.toLocaleString('fr-FR')}€ | <strong>Surface :</strong> ${bien.surface}m² | <strong>Pièces :</strong> ${bien.nb_pieces}</p>\n      <p><strong>Ville :</strong> ${bien.ville}</p>\n      \n      <p><strong>✅ Points forts :</strong></p>\n      <ul>\n        ${m.points_forts.map(pf => `<li>${pf}</li>`).join('')}\n      </ul>\n      \n      ${m.points_attention && m.points_attention.length > 0 ? `\n        <p><strong>⚠️ Points d'attention :</strong></p>\n        <ul>\n          ${m.points_attention.map(pa => `<li>${pa}</li>`).join('')}\n        </ul>\n      ` : ''}\n      \n      <p style=\"background: #f0f8ff; padding: 10px; border-radius: 5px;\">\n        <strong>Recommandation :</strong> ${m.recommandation}\n      </p>\n      \n      <p><a href=\"https://www.leboncoin.fr/ad/${bien.lbc_id}\" style=\"background: #ff6b35; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;\">Voir l'annonce</a></p>\n    </div>\n  `;\n}).join('');\n\nreturn [{\n  json: {\n    buyer_name: buyerName,\n    buyer_email: buyerEmail,\n    nb_matches: topMatchings.length,\n    biens_html: biensHTML\n  }\n}];"
+      },
+      "name": "Code - Prepare Email Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2230, 200]
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@taskimmo.com",
+        "toEmail": "={{ $json.buyer_email }}",
+        "subject": "🏡 Nouveaux biens correspondent à vos critères - {{$now.format('DD/MM/YYYY')}}",
+        "emailType": "html",
+        "message": "<div style=\"font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto;\">\n  <h1 style=\"color: #ff6b35;\">Bonjour {{ $json.buyer_name }},</h1>\n  \n  <p>Nous avons trouvé <strong>{{ $json.nb_matches }} nouveaux biens</strong> qui correspondent à vos critères de recherche !</p>\n  \n  <p>Voici les meilleures opportunités du moment :</p>\n  \n  {{ $json.biens_html }}\n  \n  <hr style=\"margin: 30px 0;\">\n  \n  <p style=\"color: #666; font-size: 12px;\">Vous recevez cet email car vous êtes inscrit chez Taskimmo en tant qu'acheteur. Si vous souhaitez modifier vos critères de recherche ou ne plus recevoir ces notifications, contactez-nous.</p>\n  \n  <p style=\"text-align: center; margin-top: 20px;\">\n    <a href=\"https://taskimmo.com\" style=\"color: #ff6b35;\">Taskimmo - Votre agence digitale à Pau</a>\n  </p>\n</div>",
+        "options": {}
+      },
+      "name": "Email - Envoyer Matchs au Client",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2450, 200],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calcule les stats globales de tous les matchings\nconst allItems = $input.all();\n\nlet totalBuyers = 0;\nlet totalMatchings = 0;\nlet totalEmailsSent = 0;\nlet buyersWithMatches = 0;\n\nfor (const item of allItems) {\n  totalBuyers++;\n  \n  if (item.json.high_score_matches > 0) {\n    buyersWithMatches++;\n    totalMatchings += item.json.high_score_matches;\n    totalEmailsSent++;\n  }\n}\n\nconst stats = {\n  date: new Date().toISOString().split('T')[0],\n  total_acheteurs_actifs: totalBuyers,\n  acheteurs_avec_matchs: buyersWithMatches,\n  total_matchings_generes: totalMatchings,\n  emails_envoyes: totalEmailsSent,\n  taux_matching: buyersWithMatches > 0 ? Math.round((buyersWithMatches / totalBuyers) * 100) : 0\n};\n\nconsole.log('Stats matching quotidien:', stats);\n\nreturn [{ json: stats }];"
+      },
+      "name": "Code - Calcul Stats Matching",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2230, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/analytics_daily",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  date: $json.date,\n  nb_matchings_generes: $json.total_matchings_generes,\n  nb_emails_envoyes: $json.emails_envoyes,\n  taux_matching: $json.taux_matching\n}) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Supabase API - UPDATE Analytics Matching",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2450, 400],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@taskimmo.com",
+        "toEmail": "robin.timothy0@gmail.com",
+        "subject": "📊 Rapport Matching Quotidien - {{$now.format('DD/MM/YYYY')}}",
+        "emailType": "html",
+        "message": "<h2>Rapport de matching quotidien</h2>\n\n<p><strong>Résumé du {{$now.format('DD/MM/YYYY à HH:mm')}} :</strong></p>\n\n<ul>\n  <li>Acheteurs actifs traités : {{$json.total_acheteurs_actifs}}</li>\n  <li>Acheteurs avec matchs : {{$json.acheteurs_avec_matchs}}</li>\n  <li>Matchings générés (score >= 70) : {{$json.total_matchings_generes}}</li>\n  <li>Emails envoyés : {{$json.emails_envoyes}}</li>\n  <li>Taux de matching : {{$json.taux_matching}}%</li>\n</ul>\n\n<p><a href=\"https://supabase.com/dashboard/project/nmrmrgfagqpoixnhisqk/editor\">Voir les matchings dans Supabase</a></p>",
+        "options": {}
+      },
+      "name": "Email - Rapport Admin",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [2670, 400]
+    }
+  ],
+  "connections": {
+    "Cron - Chaque jour à 9h": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Fetch Acheteurs Actifs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Fetch Acheteurs Actifs": {
+      "main": [
+        [
+          {
+            "node": "Code - Filter Valid Buyers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Filter Valid Buyers": {
+      "main": [
+        [
+          {
+            "node": "IF - Has Valid Buyers?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has Valid Buyers?": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Fetch Biens Enrichis",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Set - Store Buyer Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Fetch Biens Enrichis": {
+      "main": [
+        [
+          {
+            "node": "Code - Prepare Biens Array",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Prepare Biens Array": {
+      "main": [
+        [
+          {
+            "node": "Code - Merge Buyer + Biens",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set - Store Buyer Context": {
+      "main": [
+        [
+          {
+            "node": "Code - Merge Buyer + Biens",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Merge Buyer + Biens": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Edge Function Matching IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP - Edge Function Matching IA": {
+      "main": [
+        [
+          {
+            "node": "IF - Has Good Matches?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has Good Matches?": {
+      "main": [
+        [
+          {
+            "node": "Code - Prepare Email Content",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Calcul Stats Matching",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Prepare Email Content": {
+      "main": [
+        [
+          {
+            "node": "Email - Envoyer Matchs au Client",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email - Envoyer Matchs au Client": {
+      "main": [
+        [
+          {
+            "node": "Code - Calcul Stats Matching",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Calcul Stats Matching": {
+      "main": [
+        [
+          {
+            "node": "Supabase API - UPDATE Analytics Matching",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email - Rapport Admin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "taskimmo"
+    },
+    {
+      "name": "matching"
+    },
+    {
+      "name": "agent-ia-7"
+    }
+  ]
+}

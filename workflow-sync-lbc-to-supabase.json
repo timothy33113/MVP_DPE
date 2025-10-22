@@ -1,0 +1,307 @@
+{
+  "name": "Workflow #12 - Sync LBC depuis MVP vers Supabase",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 */1 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Cron - Toutes les heures",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:3001/api/integration/annonces/new?limit=200",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "AqkAGV95jdFedL1SxT8CKBTO1MmDPULIuSJAIAaBHRo="
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "name": "API MVP - Fetch Nouvelles Annonces",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [470, 300],
+      "notes": "Récupère les nouvelles annonces LBC depuis l'app MVP"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-annonces",
+              "leftValue": "={{ $json.data.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "IF - Has New Annonces?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract annonces array from response\nconst response = $input.first().json;\nconst annonces = response.data.annonces || [];\n\nconsole.log(`Processing ${annonces.length} annonces from MVP`);\n\nreturn annonces.map(a => ({ json: a }));"
+      },
+      "name": "Code - Extract Annonces",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/biens_inter_agence",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates"
+            }
+          ]
+        },
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 10,
+              "batchInterval": 1000
+            }
+          }
+        }
+      },
+      "name": "Supabase - Upsert Bien",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1130, 200],
+      "continueOnFail": true,
+      "notes": "Insert ou update dans Supabase"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calcule les stats d'import\nconst items = $input.all();\n\nconst stats = {\n  total_traites: items.length,\n  succes: items.filter(i => !i.json.error).length,\n  erreurs: items.filter(i => i.json.error).length,\n  date: new Date().toISOString()\n};\n\nconsole.log('Stats import LBC:', stats);\n\nreturn [{ json: stats }];"
+      },
+      "name": "Code - Calcul Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1350, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-imports",
+              "leftValue": "={{ $json.succes }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "IF - Has Successful Imports?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1570, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SUPABASE_URL}}/functions/v1/trigger-matching-all-buyers",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  nb_nouveaux_biens: $json.succes,\n  source: 'sync_lbc'\n}) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "name": "Supabase - Trigger Matching Global",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1790, 100],
+      "continueOnFail": true,
+      "notes": "Lance le matching IA pour tous les acquéreurs actifs"
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@taskimmo.com",
+        "toEmail": "robin.timothy0@gmail.com",
+        "subject": "✅ Sync LBC → Supabase - {{$json.succes}} nouveaux biens",
+        "emailType": "html",
+        "message": "<h2>Import LBC réussi</h2>\n\n<p><strong>{{$json.succes}} nouveaux biens</strong> importés depuis Le Bon Coin</p>\n\n<ul>\n  <li>Total traités : {{$json.total_traites}}</li>\n  <li>Succès : {{$json.succes}}</li>\n  <li>Erreurs : {{$json.erreurs}}</li>\n</ul>\n\n<p>Le matching avec les acquéreurs a été lancé automatiquement.</p>\n\n<p><a href=\"https://supabase.com/dashboard\">Voir dans Supabase</a></p>",
+        "options": {}
+      },
+      "name": "Email - Notification Admin",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1790, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@taskimmo.com",
+        "toEmail": "robin.timothy0@gmail.com",
+        "subject": "ℹ️ Sync LBC - Aucun nouveau bien",
+        "emailType": "text",
+        "message": "Aucun nouveau bien trouvé lors de la synchronisation du {{$now.format('DD/MM/YYYY à HH:mm')}}",
+        "options": {}
+      },
+      "name": "Email - No New Biens",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [690, 400]
+    }
+  ],
+  "connections": {
+    "Cron - Toutes les heures": {
+      "main": [
+        [
+          {
+            "node": "API MVP - Fetch Nouvelles Annonces",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API MVP - Fetch Nouvelles Annonces": {
+      "main": [
+        [
+          {
+            "node": "IF - Has New Annonces?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has New Annonces?": {
+      "main": [
+        [
+          {
+            "node": "Code - Extract Annonces",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email - No New Biens",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Extract Annonces": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Upsert Bien",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Upsert Bien": {
+      "main": [
+        [
+          {
+            "node": "Code - Calcul Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Calcul Stats": {
+      "main": [
+        [
+          {
+            "node": "IF - Has Successful Imports?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has Successful Imports?": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Trigger Matching Global",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email - Notification Admin",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "taskimmo"
+    },
+    {
+      "name": "integration"
+    },
+    {
+      "name": "lbc-sync"
+    }
+  ]
+}

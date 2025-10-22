@@ -1,0 +1,152 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: dpe-matching-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dpe_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_THIS_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-dpe_matching}
+      # Performance tuning
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=fr_FR.UTF-8"
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Backup automatique quotidien
+      - ./backups:/backups
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-dpe_user} -d ${POSTGRES_DB:-dpe_matching}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - dpe-network
+    # Limites de ressources
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+
+  # Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: dpe-matching-backend
+    restart: always
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dpe_user}:${POSTGRES_PASSWORD:-CHANGE_THIS_PASSWORD}@postgres:5432/${POSTGRES_DB:-dpe_matching}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost}
+      RATE_LIMIT_WINDOW_MS: ${RATE_LIMIT_WINDOW_MS:-900000}
+      RATE_LIMIT_MAX_REQUESTS: ${RATE_LIMIT_MAX_REQUESTS:-100}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      RAPIDAPI_KEY: ${RAPIDAPI_KEY}
+      MONDAY_API_KEY: ${MONDAY_API_KEY}
+      MONDAY_BOARD_ID: ${MONDAY_BOARD_ID}
+      EMAIL_USER: ${EMAIL_USER}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD}
+      NODE_OPTIONS: --max-old-space-size=4096
+    ports:
+      - '3001:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - dpe-network
+    volumes:
+      # Logs persistants
+      - ./logs:/app/packages/backend/logs
+    command: >
+      sh -c "
+        echo '🔄 Running database migrations...' &&
+        cd packages/backend &&
+        npx prisma migrate deploy &&
+        cd ../.. &&
+        echo '✅ Migrations complete. Starting server...' &&
+        node packages/backend/dist/index.js
+      "
+    # Limites de ressources
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+  # Frontend (Nginx)
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:3001}
+    container_name: dpe-matching-frontend
+    restart: always
+    ports:
+      - '80:80'
+      - '443:443'
+    depends_on:
+      - backend
+    networks:
+      - dpe-network
+    volumes:
+      # SSL certificates (si vous utilisez Let's Encrypt)
+      - ./ssl:/etc/nginx/ssl:ro
+    # Limites de ressources
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # Backup automatique (optionnel)
+  backup:
+    image: postgres:16-alpine
+    container_name: dpe-matching-backup
+    restart: "no"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dpe_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_THIS_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-dpe_matching}
+    volumes:
+      - ./backups:/backups
+      - ./scripts/backup.sh:/backup.sh:ro
+    networks:
+      - dpe-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # À exécuter manuellement ou via cron
+    # docker-compose -f docker-compose.prod.yml run --rm backup
+    entrypoint: ["/bin/sh", "/backup.sh"]
+
+volumes:
+  postgres_data:
+    driver: local
+    # Pour un volume avec backup sur un service cloud
+    # driver_opts:
+    #   type: nfs
+    #   o: addr=your-nfs-server,rw
+    #   device: ":/path/to/data"
+
+networks:
+  dpe-network:
+    driver: bridge

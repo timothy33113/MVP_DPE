@@ -1,0 +1,524 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// Enums
+// ============================================================================
+
+enum TypeBatiment {
+  MAISON
+  APPARTEMENT
+  TERRAIN
+}
+
+enum EtiquetteDpe {
+  A
+  B
+  C
+  D
+  E
+  F
+  G
+}
+
+enum StatutValidation {
+  NON_VERIFIE
+  EN_COURS
+  ADRESSE_CONFIRMEE
+  FAUX_POSITIF
+  IGNORE
+}
+
+enum NiveauConfiance {
+  CERTAIN
+  TRES_FIABLE
+  PROBABLE
+  POSSIBLE
+  DOUTEUX
+}
+
+enum UserRole {
+  ADMIN
+  USER
+}
+
+enum StatutAnnonce {
+  ACTIVE      // Annonce active sur Leboncoin
+  DESACTIVEE  // Annonce désactivée/supprimée sur Leboncoin
+  NOUVELLE    // Nouvelle annonce détectée
+}
+
+// ============================================================================
+// Models
+// ============================================================================
+
+/// Enregistrement DPE (Diagnostic de Performance Énergétique)
+model DpeRecord {
+  id                String       @id @default(uuid())
+  numeroDpe         String       @unique
+  adresseBan        String
+  codePostalBan     String       @db.VarChar(5)
+  typeBatiment      TypeBatiment
+  surfaceHabitable  Float
+  surfaceTerrain    Float?       // Surface terrain depuis cadastre
+  anneConstruction  Int?
+  etiquetteDpe      EtiquetteDpe
+  etiquetteGes      EtiquetteDpe
+  coordonneeX       Float?
+  coordonneeY       Float?
+  dateEtablissement DateTime
+  rawData           Json?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  matchCandidats      MatchCandidat[]
+  correctionsProposed MatchCorrection[] @relation("ProposedDpe") // Fois où ce DPE a été proposé
+  correctionsCorrect  MatchCorrection[] @relation("CorrectDpe") // Fois où ce DPE était le bon
+
+  @@index([codePostalBan, typeBatiment])
+  @@index([etiquetteDpe, etiquetteGes])
+  @@index([numeroDpe])
+  @@map("dpe_records")
+}
+
+/// Annonce Leboncoin
+model LeboncoinAnnonce {
+  id               String         @id @default(uuid())
+  listId           BigInt         @unique
+  url              String
+  codePostal       String         @db.VarChar(5)
+  typeBien         TypeBatiment
+  surface          Float?
+  pieces           Int?
+  chambres         Int?           // Nombre de chambres spécifiquement
+  anneConstruction Int?
+  etiquetteDpe     EtiquetteDpe?
+  etiquetteGes     EtiquetteDpe?
+  lat              Float?
+  lng              Float?
+  prix             Int?           // Prix en euros
+  surfaceTerrain   Float?         // Surface terrain en m²
+  avecBalcon       Boolean?       // Présence d'un balcon
+  avecTerrasse     Boolean?       // Présence d'une terrasse
+  avecGarage       Boolean?       // Présence d'un garage
+  avecCave         Boolean?       // Présence d'une cave
+  avecParkingPrive Boolean?       // Présence d'un parking privé
+  etatBien         String?        // 'neuf', 'renove', 'bon_etat', 'a_rafraichir', 'travaux'
+  dateDpe          DateTime?      // Date de réalisation du DPE extraite de la description
+  statutAnnonce    StatutAnnonce  @default(ACTIVE) // Statut de l'annonce sur Leboncoin
+  mandateType      String?        // Type de mandat: 'simple', 'exclusive', null pour particulier
+  datePublication  DateTime
+  dpeCorrected     Boolean        @default(false) // True si le DPE a été corrigé manuellement
+  dpeCorrectId     String?        // ID du DPE corrigé (si correction manuelle)
+  rawData          Json?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  matchCluster MatchCluster?
+  tracking     AnnonceTracking?
+  iaAnalysis   IAAnalysis?
+  corrections  MatchCorrection[] // Corrections manuelles pour cette annonce
+
+  @@index([codePostal, typeBien])
+  @@index([listId])
+  @@index([prix])
+  @@index([chambres])
+  @@index([statutAnnonce])
+  @@map("leboncoin_annonces")
+}
+
+/// Cluster de matchs pour une annonce
+model MatchCluster {
+  id              String           @id @default(uuid())
+  annonceId       String           @unique
+  annonce         LeboncoinAnnonce @relation(fields: [annonceId], references: [id], onDelete: Cascade)
+  nombreCandidats Int
+  meilleurScore   Float
+  statut          StatutValidation @default(NON_VERIFIE)
+  dpeConfirmeId   String?
+  dateValidation  DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  candidats MatchCandidat[]
+
+  @@index([statut])
+  @@index([meilleurScore])
+  @@map("match_clusters")
+}
+
+/// Candidat de match (DPE potentiel pour une annonce)
+model MatchCandidat {
+  id              String          @id @default(uuid())
+  clusterId       String
+  cluster         MatchCluster    @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+  dpeId           String
+  dpe             DpeRecord       @relation(fields: [dpeId], references: [id], onDelete: Cascade)
+  scoreTotal      Float
+  scoreBase       Float
+  scoreBonus      Float
+  scoreNormalized Float
+  confiance       NiveauConfiance
+  scoreDetails    Json
+  distanceGps     Float?
+  rang            Int
+  estSelectionne  Boolean         @default(false)
+  createdAt       DateTime        @default(now())
+
+  @@unique([clusterId, dpeId])
+  @@index([clusterId, rang])
+  @@index([scoreNormalized])
+  @@index([confiance])
+  @@map("match_candidats")
+}
+
+/// Utilisateur
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  role      UserRole @default(USER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  apiKeys ApiKey[]
+
+  @@index([email])
+  @@map("users")
+}
+
+/// Clé API pour authentification programmatique
+model ApiKey {
+  id          String    @id @default(uuid())
+  key         String    @unique @db.VarChar(64)
+  name        String
+  description String?
+  userId      String?
+  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permissions Json
+  lastUsedAt  DateTime?
+  expiresAt   DateTime?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([key])
+  @@index([userId])
+  @@map("api_keys")
+}
+
+/// Transactions DVF (Demandes de Valeurs Foncières)
+model DvfTransaction {
+  id             String   @id @default(uuid())
+  idMutation     String   @map("id_mutation")
+  dateMutation   DateTime @map("date_mutation")
+  natureMutation String   @map("nature_mutation") // Vente, échange, etc.
+  valeurFonciere Float?   @map("valeur_fonciere")
+
+  // Adresse
+  adresseNumero  String? @map("adresse_numero")
+  adresseNomVoie String? @map("adresse_nom_voie")
+  codePostal     String  @map("code_postal")
+  codeCommune    String  @map("code_commune")
+  nomCommune     String  @map("nom_commune")
+
+  // Bien
+  typeLocal               String? @map("type_local") // Maison, Appartement
+  surfaceReelleBati       Float?  @map("surface_reelle_bati")
+  nombrePiecesPrincipales Int?    @map("nombre_pieces_principales")
+  surfaceTerrain          Float?  @map("surface_terrain")
+  nombreLots              Int?    @map("nombre_lots")
+
+  // Géolocalisation
+  latitude  Float?
+  longitude Float?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([codeCommune])
+  @@index([codePostal])
+  @@index([typeLocal])
+  @@index([dateMutation])
+  @@index([latitude, longitude])
+  @@index([idMutation])
+  @@map("dvf_transactions")
+}
+
+// ============================================================================
+// Tracking & Qualification
+// ============================================================================
+
+model IAAnalysis {
+  id String @id @default(uuid())
+
+  // Référence à l'annonce
+  annonceId String           @unique @map("annonce_id")
+  annonce   LeboncoinAnnonce @relation(fields: [annonceId], references: [id], onDelete: Cascade)
+
+  // Résultats de l'analyse
+  etatGeneral     String  @db.Text @map("etat_general")
+  travauxEstimes  String  @db.Text @map("travaux_estimes") // Array JSON stringifié
+  coutEstime      String  @map("cout_estime") // Format: "XX XXX € - YY YYY €"
+  pointsForts     String  @db.Text @map("points_forts") // Array JSON stringifié
+  pointsFaibles   String  @db.Text @map("points_faibles") // Array JSON stringifié
+
+  // Métadonnées
+  nombrePhotosAnalysees Int     @default(0) @map("nombre_photos_analysees")
+  modelVersion          String  @default("claude-3-5-sonnet-20241022") @map("model_version")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([annonceId])
+  @@map("ia_analysis")
+}
+
+model AnnonceTracking {
+  id String @id @default(uuid())
+
+  // Référence à l'annonce
+  annonceId String           @unique @map("annonce_id")
+  annonce   LeboncoinAnnonce @relation(fields: [annonceId], references: [id], onDelete: Cascade)
+
+  // Statut local de prospection
+  statut String @default("nouveau") // nouveau, vu, en_cours, envoye_monday
+
+  // Données de qualification Monday
+  etapeMonday String? @map("etape_monday") // 0, 1a, 1b, 2a, etc.
+  notes       String? @db.Text
+  tacheAFaire Boolean @default(false) @map("tache_a_faire")
+
+  // Synchronisation Monday.com
+  mondayItemId   String?   @unique @map("monday_item_id")
+  mondayBoardId  String?   @map("monday_board_id")
+  mondaySyncedAt DateTime? @map("monday_synced_at")
+
+  // Métadonnées
+  firstViewedAt DateTime? @map("first_viewed_at") // Première fois vu
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([annonceId])
+  @@index([statut])
+  @@index([mondayItemId])
+  @@map("annonce_tracking")
+}
+
+// ============================================================================
+// CADASTRE - Données parcellaires
+// Source: data.gouv.fr (cadastre.data.gouv.fr)
+// ============================================================================
+
+model ParcelleCadastrale {
+  id String @id @default(uuid())
+
+  // Identifiants cadastraux
+  codeCommune     String  @map("code_commune")
+  nomCommune      String  @map("nom_commune")
+  codeDepartement String  @map("code_departement")
+  prefixeSection  String? @map("prefixe_section")
+  section         String
+  numero          String
+
+  // Identifiant unique parcelle
+  idParcelle String @unique @map("id_parcelle") // Format: {commune}{prefixe}{section}{numero}
+
+  // Surfaces
+  contenance Float? // Surface en m²
+
+  // Adresse
+  adresse    String?
+  codePostal String? @map("code_postal")
+
+  // Géolocalisation (centroïde de la parcelle)
+  latitude  Float?
+  longitude Float?
+
+  // Géométrie (optionnel - format GeoJSON)
+  geometrie Json? // Contours de la parcelle
+
+  // Métadonnées
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([codeCommune])
+  @@index([codePostal])
+  @@index([latitude, longitude])
+  @@map("parcelles_cadastrales")
+}
+
+// ============================================================================
+// Zones de recherche clients
+// ============================================================================
+
+enum ZoneType {
+  POLYGON    // Polygone dessiné manuellement
+  CIRCLE     // Cercle avec rayon
+  QUARTIER   // Quartier prédéfini
+  VILLE      // Ville complète
+}
+
+model SearchZone {
+  id          String   @id @default(cuid())
+  name        String   // "Zone Client - Jean Dupont" ou "Pau Sud + 10km"
+  description String?  // Description optionnelle
+  type        ZoneType
+
+  // Géométrie (GeoJSON format)
+  geometry    Json     // Stocke la géométrie de la zone (GeoJSON)
+  // Format pour POLYGON: { type: "Polygon", coordinates: [[[lng,lat], ...]] }
+  // Format pour CIRCLE: { type: "Circle", center: [lng, lat], radius: 5000 }
+  // Format pour QUARTIER: { type: "Quartier", city: "Pau", district: "Centre-ville" }
+
+  // Métadonnées
+  isActive    Boolean  @default(true)
+  color       String   @default("#3b82f6") // Couleur d'affichage sur la carte
+
+  // Timestamps
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("search_zones")
+}
+
+// ============================================================================
+// Gestion des acquéreurs (clients cherchant à acheter)
+// ============================================================================
+
+enum NiveauTravaux {
+  AUCUN          // Bien sans travaux
+  RAFRAICHIR     // Petit rafraîchissement (peinture, etc.)
+  RENOVER        // Rénovation moyenne
+  GROS_TRAVAUX   // Gros travaux nécessaires
+}
+
+enum TypeLocalisation {
+  CODE_POSTAL
+  VILLE
+  QUARTIER
+  ZONE_CUSTOM
+}
+
+model Acquereur {
+  id String @id @default(uuid())
+
+  // Informations contact
+  nom       String
+  prenom    String
+  email     String
+  telephone String
+
+  // Critères de recherche - Budget
+  budgetMin Int? // Budget minimum en euros
+  budgetMax Int? // Budget maximum en euros
+
+  // Critères de recherche - Type de bien
+  typeBienRecherche TypeBatiment[] // Array: MAISON, APPARTEMENT, etc.
+
+  // Critères de recherche - Surface et pièces
+  surfaceMin   Int? // Surface minimum en m²
+  surfaceMax   Int? // Surface maximum en m²
+  piecesMin    Int? // Nombre minimum de pièces
+  piecesMax    Int? // Nombre maximum de pièces
+  chambresMin  Int? // Nombre minimum de chambres
+
+  // Critères énergétiques
+  dpeMax               EtiquetteDpe? // DPE maximum accepté
+  niveauTravauxAccepte NiveauTravaux @default(RAFRAICHIR)
+
+  // Critères spécifiques - Maison
+  terrainMin  Int?     // Surface minimum terrain en m²
+  avecJardin  Boolean? // Souhaite un jardin
+  avecGarage  Boolean? // Souhaite un garage
+
+  // Critères spécifiques - Appartement
+  etageMin      Int?     // Étage minimum
+  etageMax      Int?     // Étage maximum
+  avecAscenseur Boolean? // Souhaite un ascenseur
+  avecBalcon    Boolean? // Souhaite un balcon
+  avecTerrasse  Boolean? // Souhaite une terrasse
+  avecParking   Boolean? // Souhaite un parking
+
+  // Statut
+  statutActif Boolean @default(true) // Recherche toujours active
+
+  // Relations
+  localisationsRecherche LocalisationRecherche[]
+
+  // Métadonnées
+  notes     String?  @db.Text // Notes libres
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([statutActif])
+  @@index([budgetMax])
+  @@map("acquereurs")
+}
+
+model LocalisationRecherche {
+  id String @id @default(uuid())
+
+  acquereurId String
+  acquereur   Acquereur @relation(fields: [acquereurId], references: [id], onDelete: Cascade)
+
+  type    TypeLocalisation // CODE_POSTAL, VILLE, etc.
+  valeur  String           // "64000", "Pau", "Centre-ville", etc.
+  priorite Int @default(1) // 1 = priorité haute, 2 = moyenne, 3 = basse
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([acquereurId])
+  @@index([type, valeur])
+  @@map("localisations_recherche")
+}
+
+// ============================================================================
+// Système d'apprentissage - Corrections manuelles
+// ============================================================================
+
+/// Corrections manuelles pour améliorer l'algorithme de matching
+model MatchCorrection {
+  id String @id @default(uuid())
+
+  // Annonce concernée
+  annonceId String           @map("annonce_id")
+  annonce   LeboncoinAnnonce @relation(fields: [annonceId], references: [id], onDelete: Cascade)
+
+  // DPE proposé par l'algorithme (peut être null si aucun match trouvé)
+  dpeProposedId String?    @map("dpe_proposed_id")
+  dpeProposed   DpeRecord? @relation("ProposedDpe", fields: [dpeProposedId], references: [id], onDelete: SetNull)
+  scoreProposed Float?     @map("score_proposed") // Score du DPE proposé
+  rangProposed  Int?       @map("rang_proposed") // Position dans le classement
+
+  // Bon DPE confirmé manuellement
+  dpeCorrectId String    @map("dpe_correct_id")
+  dpeCorrect   DpeRecord @relation("CorrectDpe", fields: [dpeCorrectId], references: [id], onDelete: Cascade)
+  scoreCorrect Float?    @map("score_correct") // Score du bon DPE (s'il était candidat)
+  rangCorrect  Int?      @map("rang_correct") // Position du bon DPE (s'il était candidat)
+
+  // Type de correction
+  isValidation Boolean @default(false) @map("is_validation") // true = validation (algo correct), false = correction (algo faux)
+
+  // Analyse pour l'apprentissage (optionnel)
+  notes String? @db.Text // Commentaire libre
+
+  // Métadonnées
+  createdBy String   @map("created_by") // ID user ou "manual"
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([annonceId])
+  @@index([dpeProposedId])
+  @@index([dpeCorrectId])
+  @@index([isValidation])
+  @@index([createdAt])
+  @@map("match_corrections")
+}

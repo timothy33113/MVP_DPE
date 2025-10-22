@@ -1,0 +1,350 @@
+{
+  "name": "Workflow #10A - Import LBC (RapidAPI v2 Final)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "name": "Cron - Chaque jour à 8h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://leboncoin1.p.rapidapi.com/v2/leboncoin/search_api",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "x-rapidapi-host",
+              "value": "leboncoin1.p.rapidapi.com"
+            },
+            {
+              "name": "x-rapidapi-key",
+              "value": "b859fa9ccemsh497caa0d49a5890p1a0ed5jsnf3bd81eb95bd"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"filters\": {\n    \"category\": {\n      \"id\": \"9\"\n    },\n    \"enums\": {\n      \"ad_type\": [\"offer\"],\n      \"real_estate_type\": [\"2\"]\n    },\n    \"location\": {\n      \"locations\": [\n        {\n          \"locationType\": \"city\",\n          \"label\": \"Pau (toute la ville)\",\n          \"city\": \"Pau\",\n          \"department_id\": \"64\",\n          \"region_id\": \"75\",\n          \"area\": {\n            \"lat\": 43.2951,\n            \"lng\": -0.3708,\n            \"default_radius\": 5000,\n            \"radius\": 10000\n          }\n        }\n      ]\n    }\n  },\n  \"owner_type\": \"pro\",\n  \"limit\": 100,\n  \"limit_alu\": 3,\n  \"sort_by\": \"date\",\n  \"sort_order\": \"desc\",\n  \"offset\": 0,\n  \"extend\": true,\n  \"listing_source\": \"direct-search\"\n}",
+        "options": {}
+      },
+      "name": "HTTP Request - RapidAPI LBC v2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [470, 300],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst biens = [];\n\nfunction extractSurface(text) {\n  if (!text) return null;\n  const match = text.match(/(\\d+)\\s*m[²2]/i);\n  return match ? parseInt(match[1]) : null;\n}\n\nfunction extractPieces(text) {\n  if (!text) return null;\n  const match = text.match(/([1-9])\\s*pi[èe]ces?|T([1-9])|F([1-9])/i);\n  if (match) {\n    return parseInt(match[1] || match[2] || match[3]);\n  }\n  return null;\n}\n\nfunction detectTypeBien(text) {\n  if (!text) return null;\n  const lower = text.toLowerCase();\n  if (lower.includes('appartement') || lower.includes('appt')) return 'appartement';\n  if (lower.includes('maison') || lower.includes('villa')) return 'maison';\n  if (lower.includes('terrain')) return 'terrain';\n  if (lower.includes('immeuble')) return 'immeuble';\n  return null;\n}\n\nconst response = items[0].json;\nconst ads = response.ads || [];\n\nfor (const ad of ads) {\n  if (!ad.list_id || !ad.subject) {\n    continue;\n  }\n\n  const bien = {\n    lbc_id: ad.list_id.toString(),\n    titre: ad.subject,\n    description: ad.body || '',\n    prix: parseInt(ad.price?.[0]) || 0,\n    ville: ad.location?.city || 'Non spécifié',\n    code_postal: ad.location?.zipcode || '',\n    url_annonce: ad.url || `https://www.leboncoin.fr/ad/${ad.list_id}`,\n    photos: ad.images?.urls || [],\n    nom_agence: ad.owner?.name || 'NC',\n    telephone_agence: ad.owner?.phone || null,\n    date_publication: ad.first_publication_date ? new Date(ad.first_publication_date).toISOString() : new Date().toISOString(),\n    surface: extractSurface((ad.body || '') + ' ' + ad.subject),\n    nb_pieces: extractPieces(ad.subject + ' ' + (ad.body || '')),\n    type_bien: detectTypeBien(ad.subject),\n    date_scraping: new Date().toISOString(),\n    statut_disponibilite: 'disponible'\n  };\n  \n  biens.push({ json: bien });\n}\n\nconsole.log(`Parsed ${biens.length} biens from API v2`);\nreturn biens;"
+      },
+      "name": "Code - Parse & Clean",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/biens_inter_agence?on_conflict=lbc_id",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=representation"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Supabase API - UPSERT Biens",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [910, 300],
+      "alwaysOutputData": true,
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse la réponse HTTP de Supabase et filtre uniquement les NOUVEAUX biens à enrichir\nconst items = $input.all();\nconst result = [];\nlet skipped = 0;\n\nfor (const item of items) {\n  // La réponse Supabase peut être dans item.json (array) ou dans le body\n  let bienData = null;\n  \n  if (Array.isArray(item.json)) {\n    bienData = item.json[0];\n  } else if (item.json && typeof item.json === 'object') {\n    bienData = item.json;\n  } else if (item.body) {\n    const parsed = typeof item.body === 'string' ? JSON.parse(item.body) : item.body;\n    bienData = Array.isArray(parsed) ? parsed[0] : parsed;\n  }\n  \n  if (bienData && bienData.id) {\n    // Filtrer : enrichir SEULEMENT si criteres_enrichis est NULL ou vide\n    if (!bienData.criteres_enrichis || Object.keys(bienData.criteres_enrichis || {}).length === 0) {\n      result.push({ json: bienData });\n    } else {\n      skipped++;\n      console.log(`Bien ${bienData.lbc_id} déjà enrichi - skip`);\n    }\n  } else {\n    console.error('Impossible d\\'extraire les données du bien:', item);\n  }\n}\n\nconsole.log(`Extracted ${result.length} nouveaux biens à enrichir (${skipped} déjà enrichis skippés)`);\n\n// Si aucun bien n'a été extrait, retourner un item vide pour éviter que le workflow plante\nif (result.length === 0) {\n  console.warn('Aucun nouveau bien à enrichir - arrêt du workflow');\n  return [{ json: { skip: true, message: 'Aucun nouveau bien à enrichir' } }];\n}\n\nreturn result;"
+      },
+      "name": "Code - Extract UPSERT Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1130, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-items",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "IF - Has Items to Enrich?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1280, 300]
+    },
+    {
+      "parameters": {
+        "batchSize": 10,
+        "options": {}
+      },
+      "name": "Loop - Enrichissement par batch",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1280, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SUPABASE_URL}}/functions/v1/enrich-bien-ia",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  bien_id: $json.id,\n  titre: $json.titre,\n  description: $json.description\n}) }}",
+        "options": {
+          "timeout": 30000,
+          "retry": {
+            "maxTries": 3,
+            "waitBetweenTries": 5000
+          }
+        }
+      },
+      "name": "HTTP - Edge Function Enrich IA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1350, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "amount": 3,
+        "unit": "seconds"
+      },
+      "name": "Wait",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1460, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ce nœud regroupe tous les résultats d'enrichissement\nconst allItems = $input.all();\n\nconst stats = {\n  total_traites: allItems.length,\n  enrichis_ok: allItems.filter(i => i.json.success === true).length,\n  enrichis_erreur: allItems.filter(i => i.json.success !== true).length,\n  score_moyen: 0\n};\n\n// Calcul du score moyen\nconst scoresValides = allItems\n  .filter(i => i.json.success && i.json.score)\n  .map(i => i.json.score);\n\nif (scoresValides.length > 0) {\n  stats.score_moyen = Math.round(\n    scoresValides.reduce((sum, score) => sum + score, 0) / scoresValides.length\n  );\n}\n\nconsole.log('Stats enrichissement:', stats);\n\nreturn [{ json: stats }];"
+      },
+      "name": "Code - Calcul Stats",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1570, 300]
+    },
+    {
+      "parameters": {
+        "fromEmail": "noreply@taskimmo.com",
+        "toEmail": "robin.timothy0@gmail.com",
+        "subject": "✅ Import LBC quotidien - {{$now.format('DD/MM/YYYY')}}",
+        "emailType": "html",
+        "message": "<h2>Import LeBonCoin terminé</h2>\n\n<p><strong>Résumé du {{$now.format('DD/MM/YYYY à HH:mm')}} :</strong></p>\n\n<ul>\n  <li>Biens importés : {{$json.total_traites}}</li>\n  <li>Enrichis par IA : {{$json.enrichis_ok}}</li>\n  <li>Erreurs enrichissement : {{$json.enrichis_erreur}}</li>\n  <li>Score qualité moyen : {{$json.score_moyen}}/100</li>\n</ul>\n\n<p><a href=\"https://supabase.com/dashboard/project/nmrmrgfagqpoixnhisqk/editor\">Voir dans Supabase</a></p>",
+        "options": {}
+      },
+      "name": "Email - Rapport Import",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1790, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.SUPABASE_URL}}/rest/v1/analytics_daily?on_conflict=date",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"date\": \"{{$now.toISODate()}}\",\n  \"nb_biens_importes\": {{$json.total_traites}},\n  \"cout_api_rapidapi\": {{$json.total_traites * 0.10}},\n  \"cout_api_claude\": {{$json.enrichis_ok * 0.02}},\n  \"nb_appels_claude\": {{$json.enrichis_ok}}\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Supabase API - UPDATE Analytics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1790, 500],
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Cron - Chaque jour à 8h": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request - RapidAPI LBC v2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request - RapidAPI LBC v2": {
+      "main": [
+        [
+          {
+            "node": "Code - Parse & Clean",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Parse & Clean": {
+      "main": [
+        [
+          {
+            "node": "Supabase API - UPSERT Biens",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase API - UPSERT Biens": {
+      "main": [
+        [
+          {
+            "node": "Code - Extract UPSERT Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Extract UPSERT Response": {
+      "main": [
+        [
+          {
+            "node": "IF - Has Items to Enrich?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - Has Items to Enrich?": {
+      "main": [
+        [
+          {
+            "node": "HTTP - Edge Function Enrich IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop - Enrichissement par batch": {
+      "main": [
+        [],
+        []
+      ]
+    },
+    "HTTP - Edge Function Enrich IA": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Code - Calcul Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Calcul Stats": {
+      "main": [
+        [
+          {
+            "node": "Email - Rapport Import",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Supabase API - UPDATE Analytics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": [
+    {
+      "name": "taskimmo"
+    },
+    {
+      "name": "inter-agence"
+    },
+    {
+      "name": "rapidapi-v2"
+    }
+  ]
+}

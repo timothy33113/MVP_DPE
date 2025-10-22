@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database (développement)
+  postgres:
+    image: postgres:16-alpine
+    container_name: dpe-matching-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dpe_user
+      POSTGRES_PASSWORD: dpe_password
+      POSTGRES_DB: dpe_matching
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    networks:
+      - dpe-network
+
+volumes:
+  postgres_dev_data:
+    driver: local
+
+networks:
+  dpe-network:
+    driver: bridge

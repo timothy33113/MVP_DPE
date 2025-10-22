@@ -1,0 +1,44 @@
+# Backend (ne pas déployer sur Vercel)
+packages/backend
+
+# Tests
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+**/coverage
+
+# Node modules (installés par Vercel)
+node_modules
+
+# Build artifacts
+dist
+build
+.turbo
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Logs
+logs
+*.log
+
+# Data files
+backups/
+data/
+*.csv
+*.sql
+
+# Docker files
+Dockerfile*
+docker-compose*.yml
+
+# Scripts
+scripts/
+
+# Documentation (optionnel - décommenter si vous ne voulez pas les docs en prod)
+# *.md
+# !README.md

@@ -1,0 +1,281 @@
+/**
+ * Routes pour les webhooks (n8n, Claude API, etc.)
+ */
+
+import { Router, Request, Response } from 'express';
+import { config } from '../config';
+import { prisma } from '../config/database';
+import { logger } from '../utils/logger';
+// import { SupabaseClient } from '../services/supabase.service';
+
+// Singleton Supabase client
+// let supabaseClient: SupabaseClient | null = null;
+
+// function getSupabaseClient(): SupabaseClient {
+//   if (!supabaseClient) {
+//     supabaseClient = new SupabaseClient();
+//   }
+//   return supabaseClient;
+// }
+
+const router = Router();
+
+/**
+ * Middleware de vérification de la clé API n8n
+ */
+const verifyN8nApiKey = (req: Request, res: Response, next: any) => {
+  const apiKey = req.headers['x-api-key'];
+
+  if (!apiKey || apiKey !== config.externalApis.n8nApiKey) {
+    return res.status(401).json({
+      success: false,
+      error: 'Unauthorized - Invalid API key',
+    });
+  }
+
+  next();
+};
+
+/**
+ * POST /api/webhooks/enrich-annonce
+ * Webhook pour recevoir l'enrichissement d'une annonce depuis n8n/Claude
+ */
+router.post('/enrich-annonce', verifyN8nApiKey, async (req: Request, res: Response) => {
+  try {
+    const { listId, enrichissement } = req.body;
+
+    if (!listId || !enrichissement) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: listId, enrichissement',
+      });
+    }
+
+    logger.info(`📥 Réception enrichissement IA pour annonce ${listId}`);
+
+    // Trouver l'annonce
+    const annonce = await prisma.leboncoinAnnonce.findUnique({
+      where: { listId: BigInt(listId) },
+    });
+
+    if (!annonce) {
+      return res.status(404).json({
+        success: false,
+        error: `Annonce ${listId} not found`,
+      });
+    }
+
+    // Préparer les données à mettre à jour
+    const updateData: any = {};
+
+    // État du bien (analyse IA prioritaire sur détection simple)
+    if (enrichissement.etat_bien) {
+      updateData.etatBien = enrichissement.etat_bien;
+    }
+
+    // Équipements (compléter avec IA si manquant)
+    if (enrichissement.avec_balcon !== undefined && !annonce.avecBalcon) {
+      updateData.avecBalcon = enrichissement.avec_balcon;
+    }
+    if (enrichissement.avec_terrasse !== undefined && !annonce.avecTerrasse) {
+      updateData.avecTerrasse = enrichissement.avec_terrasse;
+    }
+    if (enrichissement.avec_garage !== undefined && !annonce.avecGarage) {
+      updateData.avecGarage = enrichissement.avec_garage;
+    }
+    if (enrichissement.avec_cave !== undefined && !annonce.avecCave) {
+      updateData.avecCave = enrichissement.avec_cave;
+    }
+    if (enrichissement.avec_parking !== undefined && !annonce.avecParkingPrive) {
+      updateData.avecParkingPrive = enrichissement.avec_parking;
+    }
+
+    // Surface terrain (si l'IA a détecté mieux que les attributs)
+    if (enrichissement.surface_terrain && !annonce.surfaceTerrain) {
+      updateData.surfaceTerrain = enrichissement.surface_terrain;
+    }
+
+    // Informations supplémentaires détectées par l'IA
+    if (enrichissement.details_travaux) {
+      // Stocker dans rawData pour référence
+      const currentRawData = annonce.rawData as any || {};
+      updateData.rawData = {
+        ...currentRawData,
+        enrichissement_ia: {
+          date: new Date().toISOString(),
+          details_travaux: enrichissement.details_travaux,
+          confiance: enrichissement.confiance || 'high',
+        },
+      };
+    }
+
+    // Mettre à jour l'annonce dans PostgreSQL local
+    const updated = await prisma.leboncoinAnnonce.update({
+      where: { listId: BigInt(listId) },
+      data: updateData,
+    });
+
+    logger.info(`✅ Annonce ${listId} enrichie avec succès dans PostgreSQL`, {
+      etat: updateData.etatBien,
+      equipements: {
+        balcon: updateData.avecBalcon,
+        terrasse: updateData.avecTerrasse,
+        garage: updateData.avecGarage,
+      },
+    });
+
+    // Synchroniser vers Supabase biens_inter_agence si le bien existe
+    // DÉSACTIVÉ - Feature Claude enrichment mise en pause
+    /*
+    try {
+      const supabase = getSupabaseClient();
+
+      // Vérifier si le bien existe dans Supabase
+      const existingBiens = await supabase.query('biens_inter_agence', {
+        filters: { lbc_id: String(listId) },
+      });
+
+      if (existingBiens && existingBiens.length > 0) {
+        // Préparer criteres_enrichis au format Supabase
+        const criteresEnrichis: any = {
+          ...(existingBiens[0].criteres_enrichis || {}), // Garder les critères existants
+        };
+
+        // Ajouter l'état détecté par Claude
+        if (enrichissement.etat_bien) {
+          criteresEnrichis.etat = enrichissement.etat_bien;
+        }
+
+        // Ajouter les équipements détectés par Claude
+        if (enrichissement.avec_balcon !== undefined) {
+          criteresEnrichis.balcon = enrichissement.avec_balcon;
+        }
+        if (enrichissement.avec_terrasse !== undefined) {
+          criteresEnrichis.terrasse = enrichissement.avec_terrasse;
+        }
+        if (enrichissement.avec_garage !== undefined) {
+          criteresEnrichis.garage = enrichissement.avec_garage;
+        }
+        if (enrichissement.avec_cave !== undefined) {
+          criteresEnrichis.cave = enrichissement.avec_cave;
+        }
+        if (enrichissement.avec_parking !== undefined) {
+          criteresEnrichis.parking = enrichissement.avec_parking;
+        }
+        if (enrichissement.surface_terrain) {
+          criteresEnrichis.surface_terrain = enrichissement.surface_terrain;
+        }
+
+        // Stocker les détails d'analyse IA
+        criteresEnrichis.enrichissement_ia = {
+          date: new Date().toISOString(),
+          details_travaux: enrichissement.details_travaux || null,
+          confiance: enrichissement.confiance || 'high',
+        };
+
+        // Mettre à jour dans Supabase
+        await supabase.update('biens_inter_agence', existingBiens[0].id, {
+          criteres_enrichis: criteresEnrichis,
+        });
+
+        logger.info(`✅ Bien ${listId} synchronisé vers Supabase biens_inter_agence`);
+      } else {
+        logger.info(`ℹ️ Bien ${listId} n'existe pas encore dans Supabase (sera créé lors du matching)`);
+      }
+    } catch (supabaseError: any) {
+      logger.error(`⚠️ Erreur synchronisation Supabase pour ${listId}:`, supabaseError);
+      // Ne pas bloquer l'enrichissement PostgreSQL si Supabase échoue
+    }
+    */
+
+    res.json({
+      success: true,
+      message: 'Annonce enrichie avec succès',
+      data: {
+        listId,
+        updated_fields: Object.keys(updateData),
+      },
+    });
+  } catch (error: any) {
+    logger.error('❌ Erreur enrichissement annonce:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to enrich annonce',
+      details: error.message,
+    });
+  }
+});
+
+/**
+ * POST /api/webhooks/batch-enrich
+ * Lance l'enrichissement en batch de toutes les annonces non enrichies
+ * Retourne la liste des annonces à traiter
+ */
+router.post('/batch-enrich', verifyN8nApiKey, async (req: Request, res: Response) => {
+  try {
+    const { limit = 100 } = req.body;
+
+    // Trouver les annonces sans enrichissement IA ou sans état du bien
+    const annonces = await prisma.leboncoinAnnonce.findMany({
+      where: {
+        OR: [
+          { etatBien: null },
+          {
+            rawData: {
+              path: ['enrichissement_ia'],
+              equals: null,
+            },
+          },
+        ],
+        rawData: {
+          not: { equals: null },
+        },
+      },
+      take: Number(limit),
+      select: {
+        id: true,
+        listId: true,
+        url: true,
+        typeBien: true,
+        codePostal: true,
+        surface: true,
+        pieces: true,
+        chambres: true,
+        prix: true,
+        rawData: true,
+      },
+    });
+
+    // Préparer les données pour n8n
+    const annoncesToEnrich = annonces.map((annonce) => {
+      const rawData = annonce.rawData as any;
+      return {
+        listId: annonce.listId.toString(),
+        url: annonce.url,
+        type: annonce.typeBien,
+        description: rawData?.body || '',
+        surface: annonce.surface,
+        pieces: annonce.pieces,
+        chambres: annonce.chambres,
+        prix: annonce.prix,
+      };
+    });
+
+    logger.info(`📤 Préparation de ${annoncesToEnrich.length} annonces pour enrichissement IA`);
+
+    res.json({
+      success: true,
+      count: annoncesToEnrich.length,
+      data: annoncesToEnrich,
+    });
+  } catch (error: any) {
+    logger.error('❌ Erreur batch enrichissement:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to prepare batch enrichment',
+      details: error.message,
+    });
+  }
+});
+
+export default router;

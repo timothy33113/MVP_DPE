@@ -1,0 +1,135 @@
+/**
+ * Repository pour les opérations de matching
+ */
+
+import { prisma } from '@config/database';
+import { MatchCluster, MatchCandidat, StatutValidation } from '@dpe-matching/shared';
+import { logger } from '@utils/logger';
+
+export class MatchingRepository {
+  /**
+   * Crée un cluster de match avec ses candidats
+   */
+  async createMatchCluster(
+    annonceId: string,
+    candidats: Omit<MatchCandidat, 'id' | 'clusterId' | 'createdAt'>[],
+    meilleurScore: number
+  ): Promise<MatchCluster> {
+    logger.info('Creating match cluster for annonce ' + annonceId + ' with ' + candidats.length + ' candidates');
+
+    const cluster = await prisma.matchCluster.create({
+      data: {
+        annonceId,
+        nombreCandidats: candidats.length,
+        meilleurScore,
+        statut: StatutValidation.NON_VERIFIE,
+        candidats: {
+          create: candidats.map((c) => ({
+            dpeId: c.dpeId,
+            scoreTotal: c.scoreTotal,
+            scoreBase: c.scoreBase,
+            scoreBonus: c.scoreBonus,
+            scoreNormalized: c.scoreNormalized,
+            confiance: c.confiance,
+            scoreDetails: c.scoreDetails as any,
+            distanceGps: c.distanceGps,
+            rang: c.rang,
+            estSelectionne: c.estSelectionne,
+          })),
+        },
+      },
+      include: {
+        annonce: true,
+        candidats: {
+          include: {
+            dpe: true,
+          },
+          orderBy: {
+            rang: 'asc',
+          },
+        },
+      },
+    });
+
+    return cluster as any;
+  }
+
+  /**
+   * Récupère un cluster de match par ID
+   */
+  async getMatchClusterById(id: string): Promise<MatchCluster | null> {
+    const cluster = await prisma.matchCluster.findUnique({
+      where: { id },
+      include: {
+        annonce: true,
+        candidats: {
+          include: {
+            dpe: true,
+          },
+          orderBy: {
+            rang: 'asc',
+          },
+        },
+      },
+    });
+
+    return cluster as any;
+  }
+
+  /**
+   * Liste les clusters de match avec pagination
+   */
+  async listMatchClusters(page: number, limit: number, statut?: StatutValidation) {
+    const where = statut ? { statut } : {};
+
+    const [clusters, total] = await Promise.all([
+      prisma.matchCluster.findMany({
+        where,
+        include: {
+          annonce: true,
+        },
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: {
+          createdAt: 'desc',
+        },
+      }),
+      prisma.matchCluster.count({ where }),
+    ]);
+
+    return {
+      clusters: clusters as any[],
+      total,
+    };
+  }
+
+  /**
+   * Met à jour le statut d'un cluster
+   */
+  async updateClusterStatus(
+    id: string,
+    statut: StatutValidation,
+    dpeConfirmeId?: string
+  ): Promise<MatchCluster> {
+    const cluster = await prisma.matchCluster.update({
+      where: { id },
+      data: {
+        statut,
+        dpeConfirmeId,
+        dateValidation: statut === StatutValidation.ADRESSE_CONFIRMEE ? new Date() : null,
+      },
+      include: {
+        annonce: true,
+        candidats: {
+          include: {
+            dpe: true,
+          },
+        },
+      },
+    });
+
+    return cluster as any;
+  }
+}
+
+export const matchingRepository = new MatchingRepository();

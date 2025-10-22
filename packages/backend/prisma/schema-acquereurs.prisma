@@ -1,0 +1,251 @@
+// ============================================================================
+// SYSTÈME DE MATCHING ACQUÉREURS
+// ============================================================================
+// Ce fichier contient les modèles pour le matching biens ↔ acquéreurs
+// À intégrer dans le schema.prisma principal
+
+// ============================================================================
+// Enums supplémentaires
+// ============================================================================
+
+enum StatutAcquereur {
+  ACTIF           // Recherche active
+  EN_ATTENTE      // Recherche en pause
+  FINALISE        // A acheté (par nous ou ailleurs)
+  ARCHIVE         // Plus intéressé
+}
+
+enum TypeLocalisation {
+  CODE_POSTAL     // Ex: 64000
+  VILLE           // Ex: Pau
+  QUARTIER        // Ex: Trespoey, Centre-ville
+  ZONE            // Ex: "Pau et 10km", "Béarn"
+}
+
+enum NiveauTravaux {
+  NEUF_RENOVE     // Prêt à habiter
+  PEU_TRAVAUX     // Rafraîchissement
+  TRAVAUX_MOYEN   // Rénovation partielle
+  GROS_TRAVAUX    // Rénovation complète
+  TOUS            // Pas de préférence
+}
+
+enum StatutMatchAcquereur {
+  NOUVEAU         // Match créé, pas encore envoyé
+  ENVOYE          // Envoyé par email/SMS
+  VU              // Client a ouvert
+  INTERESSE       // Client veut en savoir plus
+  VISITE_PREVUE   // Visite programmée
+  REFUSE          // Pas intéressé
+  VENDU           // Bien vendu (à ce client ou autre)
+}
+
+enum CanalNotification {
+  EMAIL
+  SMS
+  WHATSAPP
+  MONDAY
+  MANUEL          // À envoyer manuellement
+}
+
+// ============================================================================
+// Modèles
+// ============================================================================
+
+/// Client acquéreur recherchant un bien
+model Acquereur {
+  id                String            @id @default(uuid())
+
+  // Identité
+  civilite          String?           // M., Mme
+  nom               String
+  prenom            String
+  email             String            @unique
+  telephone         String?
+  telephoneSecondaire String?
+
+  // Origine
+  mondayItemId      String?           @unique  // ID de l'item dans Monday
+  source            String?           // D'où vient le lead (site web, apport, etc.)
+  agentResponsable  String?           // Nom de l'agent responsable
+
+  // ============================================================================
+  // CRITÈRES DE RECHERCHE
+  // ============================================================================
+
+  // Budget
+  budgetMin         Float?
+  budgetMax         Float
+  apportPersonnel   Float?            // Pour calculer capacité d'emprunt
+
+  // Type de bien
+  typeBienRecherche TypeBatiment[]    // [MAISON, APPARTEMENT]
+
+  // Surface
+  surfaceMin        Float?
+  surfaceMax        Float?
+
+  // Pièces
+  piecesMin         Int?
+  piecesMax         Int?
+  chambresMin       Int?              // Nombre de chambres spécifiquement
+  chambresMax       Int?
+
+  // Localisation (flexible)
+  localisations     LocalisationRecherche[]
+  rayonRecherche    Int?              // km autour des localisations
+
+  // Critères spécifiques
+  dpeMax            EtiquetteDpe?     // Accepte jusqu'à... (D, E, etc.)
+  gesMax            EtiquetteDpe?
+  niveauTravauxAccepte NiveauTravaux @default(TOUS)
+
+  // Maison - critères spécifiques
+  terrainMin        Float?            // Surface terrain minimum (m²)
+  terrainMax        Float?
+  avecJardin        Boolean           @default(false)
+  avecPiscine       Boolean           @default(false)
+  avecGarage        Boolean           @default(false)
+
+  // Appartement - critères spécifiques
+  etageMin          Int?
+  etageMax          Int?
+  avecAscenseur     Boolean           @default(false)
+  avecBalcon        Boolean           @default(false)
+  avecTerrasse      Boolean           @default(false)
+  avecParking       Boolean           @default(false)
+  tailleCoproMax    Int?              // Nombre de lots max dans la copro
+
+  // Autres préférences
+  anneConstructionMin Int?
+  anneConstructionMax Int?
+
+  // ============================================================================
+  // GESTION & SUIVI
+  // ============================================================================
+
+  statut            StatutAcquereur   @default(ACTIF)
+  priorite          Int               @default(3) // 1 (faible) à 5 (haute)
+
+  // Notifications
+  canaux            CanalNotification[] // Comment le contacter
+  frequenceAlerte   String?           // "immediate", "quotidien", "hebdomadaire"
+
+  // Notes
+  notes             String?           @db.Text
+  criteresSupplem   String?           @db.Text // Critères en texte libre
+
+  // Dates
+  dateCreation      DateTime          @default(now())
+  dateMAJ           DateTime          @updatedAt
+  dateDerniereAlerte DateTime?        // Dernière notification envoyée
+
+  // Relations
+  matchs            MatchAcquereur[]
+  localisationsRecherche LocalisationRecherche[]
+
+  @@index([statut, priorite])
+  @@index([budgetMax])
+  @@index([mondayItemId])
+  @@map("acquereurs")
+}
+
+/// Localisation flexible pour la recherche
+model LocalisationRecherche {
+  id            String            @id @default(uuid())
+  acquereurId   String
+  acquereur     Acquereur         @relation(fields: [acquereurId], references: [id], onDelete: Cascade)
+
+  type          TypeLocalisation
+  valeur        String            // "64000", "Pau", "Trespoey", etc.
+  label         String?           // Libellé affiché
+  priorite      Int               @default(1) // 1 = principale, 2 = secondaire
+
+  @@index([acquereurId])
+  @@map("localisations_recherche")
+}
+
+/// Match entre un bien et un acquéreur
+model MatchAcquereur {
+  id              String                @id @default(uuid())
+
+  // Acquéreur
+  acquereurId     String
+  acquereur       Acquereur             @relation(fields: [acquereurId], references: [id], onDelete: Cascade)
+
+  // Bien (peut être une annonce LBC OU un DPE chez vous)
+  annonceId       String?
+  annonce         LeboncoinAnnonce?     @relation(fields: [annonceId], references: [id], onDelete: Cascade)
+  dpeId           String?
+  dpe             DpeRecord?            @relation(fields: [dpeId], references: [id], onDelete: Cascade)
+
+  // Scoring
+  scoreTotal      Float
+  scoreDetails    Json                  // Détail du calcul pour transparence
+
+  // Détails du match
+  pointsForts     String[]              // ["Budget OK", "Localisation parfaite", "Surface idéale"]
+  pointsFaibles   String[]              // ["Étage élevé", "Pas de parking"]
+
+  // Suivi
+  statut          StatutMatchAcquereur  @default(NOUVEAU)
+  canal           CanalNotification?    // Par quel canal on l'a envoyé
+  dateEnvoi       DateTime?
+  dateOuverture   DateTime?             // Tracking email
+  dateClicLien    DateTime?             // A cliqué sur le lien de l'annonce
+  dateVisite      DateTime?             // Visite programmée
+  dateRefus       DateTime?
+  raisonRefus     String?               // Pourquoi refusé
+
+  // Notes agent
+  notes           String?               @db.Text
+
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@unique([acquereurId, annonceId])    // Un acquéreur ne peut matcher qu'une fois avec une annonce
+  @@unique([acquereurId, dpeId])        // Un acquéreur ne peut matcher qu'une fois avec un DPE
+  @@index([statut])
+  @@index([scoreTotal])
+  @@index([acquereurId, statut])
+  @@map("matchs_acquereurs")
+}
+
+/// Historique des notifications envoyées
+model NotificationAcquereur {
+  id              String                @id @default(uuid())
+  acquereurId     String
+  matchId         String?               // Si lié à un match spécifique
+
+  canal           CanalNotification
+  type            String                // "nouveau_bien", "rappel", "alerte_prix"
+  contenu         String                @db.Text
+
+  statut          String                // "envoye", "ouvert", "clique", "erreur"
+
+  // Tracking
+  dateEnvoi       DateTime              @default(now())
+  dateOuverture   DateTime?
+  dateClicLien    DateTime?
+
+  // Métadonnées
+  metadata        Json?                 // Infos techniques (ID email, etc.)
+
+  @@index([acquereurId])
+  @@index([dateEnvoi])
+  @@map("notifications_acquereurs")
+}
+
+/// Configuration des zones de recherche pré-définies
+model ZoneRecherche {
+  id              String   @id @default(uuid())
+  nom             String   @unique       // "Pau Centre", "Béarn", "Pyrénées"
+  description     String?
+  codesPostaux    String[]              // Liste des codes postaux inclus
+  villes          String[]              // Liste des villes incluses
+  quartiers       String[]              // Liste des quartiers inclus
+
+  actif           Boolean  @default(true)
+
+  @@map("zones_recherche")
+}

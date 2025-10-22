@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Filtre Balcon</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .results {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .stat {
+            display: inline-block;
+            margin: 10px 20px 10px 0;
+            padding: 10px 20px;
+            background: #e3f2fd;
+            border-radius: 4px;
+        }
+        .stat strong {
+            color: #1976d2;
+            font-size: 24px;
+        }
+        button {
+            padding: 12px 24px;
+            margin: 10px 10px 10px 0;
+            border: 2px solid #1976d2;
+            background: white;
+            color: #1976d2;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button.active {
+            background: #1976d2;
+            color: white;
+        }
+        button:hover {
+            background: #1976d2;
+            color: white;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        th {
+            background: #1976d2;
+            color: white;
+        }
+        tr:hover {
+            background: #f5f5f5;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 Test Filtre Balcon - DPE Matching</h1>
+
+    <div class="results">
+        <h2>Filtres</h2>
+        <button id="btnBalcon" onclick="toggleBalcon()">🌿 Balcon</button>
+        <button id="btnTerrasse" onclick="toggleTerrasse()">☀️ Terrasse</button>
+        <button id="btnGarage" onclick="toggleGarage()">🚗 Garage</button>
+        <button onclick="resetFilters()">🔄 Réinitialiser</button>
+    </div>
+
+    <div class="results">
+        <h2>Résultats</h2>
+        <div class="stat">
+            Total matchs: <strong id="totalMatches">-</strong>
+        </div>
+        <div class="stat">
+            Avec balcon: <strong id="avecBalcon">-</strong>
+        </div>
+        <div class="stat">
+            Avec terrasse: <strong id="avecTerrasse">-</strong>
+        </div>
+        <div class="stat">
+            Avec garage: <strong id="avecGarage">-</strong>
+        </div>
+    </div>
+
+    <div class="results">
+        <h2>Échantillon de résultats (10 premiers)</h2>
+        <div id="loading" class="loading">Chargement...</div>
+        <table id="resultsTable" style="display: none;">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Type</th>
+                    <th>Prix</th>
+                    <th>Chambres</th>
+                    <th>Balcon</th>
+                    <th>Terrasse</th>
+                    <th>Garage</th>
+                    <th>État</th>
+                </tr>
+            </thead>
+            <tbody id="resultsBody"></tbody>
+        </table>
+    </div>
+
+    <script>
+        let allMatches = [];
+        let filters = {
+            balcon: false,
+            terrasse: false,
+            garage: false
+        };
+
+        async function loadData() {
+            try {
+                const response = await fetch('http://localhost:3001/api/matching/clusters-with-dpe?limit=10000');
+                const data = await response.json();
+
+                if (data.success && data.data && data.data.items) {
+                    allMatches = data.data.items;
+                    console.log('✅ Données chargées:', allMatches.length, 'matchs');
+                    updateResults();
+                } else {
+                    console.error('❌ Format de données inattendu:', data);
+                    document.getElementById('loading').textContent = 'Erreur de chargement';
+                }
+            } catch (error) {
+                console.error('❌ Erreur:', error);
+                document.getElementById('loading').textContent = 'Erreur de connexion à l\'API';
+            }
+        }
+
+        function toggleBalcon() {
+            filters.balcon = !filters.balcon;
+            document.getElementById('btnBalcon').classList.toggle('active', filters.balcon);
+            updateResults();
+        }
+
+        function toggleTerrasse() {
+            filters.terrasse = !filters.terrasse;
+            document.getElementById('btnTerrasse').classList.toggle('active', filters.terrasse);
+            updateResults();
+        }
+
+        function toggleGarage() {
+            filters.garage = !filters.garage;
+            document.getElementById('btnGarage').classList.toggle('active', filters.garage);
+            updateResults();
+        }
+
+        function resetFilters() {
+            filters = { balcon: false, terrasse: false, garage: false };
+            document.getElementById('btnBalcon').classList.remove('active');
+            document.getElementById('btnTerrasse').classList.remove('active');
+            document.getElementById('btnGarage').classList.remove('active');
+            updateResults();
+        }
+
+        function updateResults() {
+            // Filtrer les matchs
+            let filtered = allMatches.filter(match => {
+                if (!match.annonce) return false;
+
+                // Appliquer les filtres
+                if (filters.balcon && !match.annonce.avecBalcon) return false;
+                if (filters.terrasse && !match.annonce.avecTerrasse) return false;
+                if (filters.garage && !match.annonce.avecGarage) return false;
+
+                return true;
+            });
+
+            // Compter les caractéristiques
+            const stats = {
+                total: filtered.length,
+                balcon: filtered.filter(m => m.annonce?.avecBalcon === true).length,
+                terrasse: filtered.filter(m => m.annonce?.avecTerrasse === true).length,
+                garage: filtered.filter(m => m.annonce?.avecGarage === true).length
+            };
+
+            // Afficher les stats
+            document.getElementById('totalMatches').textContent = stats.total;
+            document.getElementById('avecBalcon').textContent = stats.balcon;
+            document.getElementById('avecTerrasse').textContent = stats.terrasse;
+            document.getElementById('avecGarage').textContent = stats.garage;
+
+            // Afficher le tableau
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('resultsTable').style.display = 'table';
+
+            // Remplir le tableau avec les 10 premiers résultats
+            const tbody = document.getElementById('resultsBody');
+            tbody.innerHTML = '';
+
+            filtered.slice(0, 10).forEach(match => {
+                const annonce = match.annonce;
+                if (!annonce) return;
+
+                const row = tbody.insertRow();
+                row.insertCell(0).textContent = annonce.listId;
+                row.insertCell(1).textContent = annonce.typeBien;
+                row.insertCell(2).textContent = annonce.prix ? annonce.prix.toLocaleString() + ' €' : '-';
+                row.insertCell(3).textContent = annonce.chambres || '-';
+                row.insertCell(4).textContent = annonce.avecBalcon ? '✅' : '❌';
+                row.insertCell(5).textContent = annonce.avecTerrasse ? '✅' : '❌';
+                row.insertCell(6).textContent = annonce.avecGarage ? '✅' : '❌';
+                row.insertCell(7).textContent = annonce.etatBien || '-';
+            });
+
+            console.log('📊 Résultats filtrés:', stats);
+        }
+
+        // Charger les données au démarrage
+        loadData();
+    </script>
+</body>
+</html>

@@ -3,7 +3,16 @@
   "outputDirectory": "packages/frontend/dist",
   "installCommand": "pnpm install",
   "framework": "vite",
+  "functions": {
+    "api/**/*.ts": {
+      "maxDuration": 60
+    }
+  },
   "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
     {
       "source": "/(.*)",
       "destination": "/index.html"

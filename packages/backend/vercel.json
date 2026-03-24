@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "buildCommand": "cd ../shared && pnpm build && cd ../backend && npx prisma generate && pnpm build",
+  "installCommand": "pnpm install --no-frozen-lockfile",
+  "functions": {
+    "api/index.ts": {
+      "maxDuration": 60
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/api"
+    }
+  ]
+}

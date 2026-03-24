@@ -47,12 +47,19 @@ router.post('/trigger', asyncHandler(async (req: Request, res: Response) => {
   const start = Date.now();
 
   // 1. Lancer le matching
-  const stats = await matchingAcquereurService.runFullMatching({
-    scoreMin,
-    bienIds,
-    acquereurIds,
-    dryRun,
-  });
+  let stats;
+  try {
+    stats = await matchingAcquereurService.runFullMatching({
+      scoreMin,
+      bienIds,
+      acquereurIds,
+      dryRun,
+    });
+  } catch (error: any) {
+    console.error(`[Matching] ❌ Erreur matching:`, error.message, error.stack);
+    res.status(500).json({ success: false, error: error.message, stack: error.stack?.split('\n').slice(0, 5) });
+    return;
+  }
 
   const duration = ((Date.now() - start) / 1000).toFixed(1);
   console.log(`[Matching] ✅ Terminé en ${duration}s — ${stats.nouveauxMatchs} nouveaux, ${stats.matchsMisAJour} mis à jour`);

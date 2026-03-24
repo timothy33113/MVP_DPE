@@ -1,5 +1,5 @@
 {
-  "buildCommand": "pnpm --filter @dpe-matching/shared build && pnpm --filter @dpe-matching/frontend build",
+  "buildCommand": "pnpm --filter @dpe-matching/shared build && cd packages/frontend && npx vite build",
   "outputDirectory": "packages/frontend/dist",
   "installCommand": "pnpm install --no-frozen-lockfile",
   "framework": null,

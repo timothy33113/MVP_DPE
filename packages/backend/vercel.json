@@ -1,7 +1,7 @@
 {
   "version": 2,
-  "installCommand": "cd ../.. && pnpm install --no-frozen-lockfile",
-  "buildCommand": "cd ../.. && pnpm --filter @dpe-matching/shared build && cd packages/backend && npx prisma generate && pnpm build",
+  "installCommand": "npm install --no-package-lock express cors helmet compression dotenv @prisma/client jsonwebtoken winston zod express-rate-limit express-validator bcryptjs nodemailer swagger-jsdoc swagger-ui-express papaparse proj4 csv-parse",
+  "buildCommand": "npx prisma generate",
   "outputDirectory": ".",
   "functions": {
     "api/index.js": {

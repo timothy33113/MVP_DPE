@@ -22,6 +22,9 @@ import routes from '@routes/index';
 export const createApp = (): Application => {
   const app = express();
 
+  // Trust proxy (required for Vercel/reverse proxy)
+  app.set('trust proxy', 1);
+
   // Security middleware
   app.use(helmet());
   app.use(cors(config.cors));

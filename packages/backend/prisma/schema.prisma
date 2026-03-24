@@ -6,8 +6,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ============================================================================
@@ -453,6 +454,7 @@ model Acquereur {
 
   // Relations
   localisationsRecherche LocalisationRecherche[]
+  matchsAmanda           MatchAcquereurAmanda[]
 
   // Métadonnées
   notes     String?  @db.Text // Notes libres
@@ -479,6 +481,189 @@ model LocalisationRecherche {
   @@index([acquereurId])
   @@index([type, valeur])
   @@map("localisations_recherche")
+}
+
+// ============================================================================
+// Biens Amanda (source Amanda → Monday → Supabase)
+// ============================================================================
+
+enum StatutBienAmanda {
+  DISPONIBLE
+  OFFRE_EN_COURS
+  SOUS_COMPROMIS
+  VENDU
+  SUSPENDU
+  RETIRE
+}
+
+model AmandaBien {
+  id String @id @default(uuid())
+
+  // Identifiants
+  mandateRef    String  @unique @map("mandate_ref")     // Référence Amanda (ex: "814")
+  amandaId      Int     @unique @map("amanda_id")       // ID interne Amanda
+  mondayItemId  String? @unique @map("monday_item_id")  // ID Monday.com
+
+  // Localisation
+  adresse       String?
+  codePostal    String?  @map("code_postal") @db.VarChar(10)
+  ville         String?
+  latitude      Float?
+  longitude     Float?
+
+  // Type et statut
+  typeBien      TypeBatiment?  @map("type_bien")
+  sousType      String?        @map("sous_type")
+  statut        StatutBienAmanda @default(DISPONIBLE)
+  agenceName    String?        @map("agence_name")
+
+  // Prix
+  prix          Int?
+  honoraires    Int?
+  prixVendu     Int?           @map("prix_vendu")
+
+  // Surfaces
+  surfaceHabitable  Float?  @map("surface_habitable")
+  surfaceCarrez     Float?  @map("surface_carrez")
+  surfaceTerrain    Float?  @map("surface_terrain")
+
+  // Pièces
+  nbPieces      Int?  @map("nb_pieces")
+  nbChambres    Int?  @map("nb_chambres")
+  nbSdb         Int?  @map("nb_sdb")
+  nbWc          Int?  @map("nb_wc")
+  nbNiveaux     Int?  @map("nb_niveaux")
+  etage         Int?
+
+  // Construction
+  anneConstruction  Int?  @map("anne_construction")
+  etatGeneral       String?  @map("etat_general")
+
+  // Énergie
+  dpeClasse     String?  @map("dpe_classe")  @db.VarChar(1) // A-G
+  gesClasse     String?  @map("ges_classe")  @db.VarChar(1) // A-G
+  dpeValeur     Float?   @map("dpe_valeur")
+  gesValeur     Float?   @map("ges_valeur")
+  energieChauffage String? @map("energie_chauffage")
+
+  // Cuisine
+  typeCuisine       String?  @map("type_cuisine")
+  mobilierCuisine   String?  @map("mobilier_cuisine")
+
+  // Équipements (booléens)
+  avecAscenseur     Boolean @default(false) @map("avec_ascenseur")
+  avecPiscine       Boolean @default(false) @map("avec_piscine")
+  avecBalcon        Boolean @default(false) @map("avec_balcon")
+  avecTerrasse      Boolean @default(false) @map("avec_terrasse")
+  avecGarage        Boolean @default(false) @map("avec_garage")
+  avecCave          Boolean @default(false) @map("avec_cave")
+  avecParking       Boolean @default(false) @map("avec_parking")
+  avecJardin        Boolean @default(false) @map("avec_jardin")
+  avecCheminee      Boolean @default(false) @map("avec_cheminee")
+  avecClimatisation Boolean @default(false) @map("avec_climatisation")
+  avecDoubleVitrage Boolean @default(false) @map("avec_double_vitrage")
+
+  // Copropriété
+  estCopropriete    Boolean @default(false) @map("est_copropriete")
+  nbLotsCopro       Int?    @map("nb_lots_copro")
+  chargesAnnuelles  Float?  @map("charges_annuelles")
+  taxeFonciere      Float?  @map("taxe_fonciere")
+
+  // Assainissement
+  assainissement    String?  // Individuel, Collectif
+
+  // Description
+  description       String?  @db.Text
+  photoUrls         Json?    @map("photo_urls")  // Array de URLs
+  videoUrl          String?  @map("video_url")
+
+  // Dates
+  dateMandat        DateTime? @map("date_mandat")
+  dateCompromis     DateTime? @map("date_compromis")
+
+  // Données brutes Amanda
+  rawData           Json?    @map("raw_data")
+
+  // Relations
+  matchsAcquereur   MatchAcquereurAmanda[]
+
+  // Métadonnées
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([codePostal, typeBien])
+  @@index([prix])
+  @@index([statut])
+  @@index([ville])
+  @@index([nbChambres])
+  @@index([surfaceHabitable])
+  @@map("amanda_biens")
+}
+
+// ============================================================================
+// Matching Acquéreur ↔ Bien Amanda
+// ============================================================================
+
+enum StatutMatch {
+  NOUVEAU       // Match vient d'être créé
+  NOTIFIE       // Prospect notifié (Slack/Email)
+  VU            // Match vu par le commercial
+  PROPOSE       // Bien proposé au prospect
+  VISITE        // Visite programmée ou effectuée
+  ACCEPTE       // Prospect intéressé
+  REFUSE        // Prospect pas intéressé
+  EXPIRE        // Match expiré (bien vendu, etc.)
+}
+
+model MatchAcquereurAmanda {
+  id String @id @default(uuid())
+
+  // Relations
+  acquereurId String     @map("acquereur_id")
+  acquereur   Acquereur  @relation(fields: [acquereurId], references: [id], onDelete: Cascade)
+  bienId      String     @map("bien_id")
+  bien        AmandaBien @relation(fields: [bienId], references: [id], onDelete: Cascade)
+
+  // Scoring (sur 100)
+  scoreTotal      Float   @map("score_total")
+  scoreBudget     Float   @map("score_budget")      // /30
+  scoreType       Float   @map("score_type")         // /20
+  scoreLocalisation Float @map("score_localisation") // /20
+  scoreSurface    Float   @map("score_surface")      // /10
+  scorePieces     Float   @map("score_pieces")       // /10
+  scoreDpe        Float   @map("score_dpe")          // /5
+  scoreEquipements Float  @map("score_equipements")  // /5
+  scoreDetails    Json?   @map("score_details")      // Détail complet du scoring
+
+  // IA
+  iaAnalyse       String?  @db.Text @map("ia_analyse")  // Analyse IA du match
+  iaRecommandation String? @map("ia_recommandation")     // Action recommandée par l'IA
+  iaScore         Float?   @map("ia_score")              // Score IA complémentaire (0-100)
+
+  // Statut
+  statut          StatutMatch @default(NOUVEAU)
+
+  // Notifications
+  slackNotifie    Boolean @default(false) @map("slack_notifie")
+  mondayLie       Boolean @default(false) @map("monday_lie")
+  emailNotifie    Boolean @default(false) @map("email_notifie")
+  dateNotification DateTime? @map("date_notification")
+
+  // Feedback commercial
+  feedbackNote    String?  @db.Text @map("feedback_note")
+  dateVisite      DateTime? @map("date_visite")
+
+  // Métadonnées
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([acquereurId, bienId])
+  @@index([acquereurId])
+  @@index([bienId])
+  @@index([scoreTotal])
+  @@index([statut])
+  @@index([createdAt])
+  @@map("match_acquereur_amanda")
 }
 
 // ============================================================================

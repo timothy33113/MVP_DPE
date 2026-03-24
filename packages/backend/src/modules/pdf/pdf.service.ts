@@ -1,4 +1,10 @@
-import puppeteer from 'puppeteer';
+// Dynamic import to avoid crash on serverless (Vercel)
+let puppeteer: any;
+try {
+  puppeteer = require('puppeteer');
+} catch {
+  // puppeteer not available in serverless environment
+}
 import { logger } from '../../utils/logger.js';
 import { prisma } from '../../config/database.js';
 import { renderProfessionalTemplate } from './pdf-template-new.js';

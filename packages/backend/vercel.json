@@ -2,11 +2,6 @@
   "version": 2,
   "installCommand": "echo '{\"dependencies\":{\"@prisma/client\":\"5.22.0\",\"prisma\":\"5.22.0\"}}' > package.json && npm install --no-package-lock",
   "buildCommand": "npx prisma generate",
-  "functions": {
-    "api/**/*.js": {
-      "maxDuration": 60
-    }
-  },
   "rewrites": [
     {
       "source": "/(.*)",

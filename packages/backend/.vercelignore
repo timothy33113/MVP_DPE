@@ -1,8 +1,6 @@
 src/
 dist/
 scripts/
-*.ts
-!api/
 tsconfig.json
 tsconfig.paths.json
 jest.config.ts

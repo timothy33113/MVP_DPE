@@ -42,8 +42,9 @@ const transports: winston.transport[] = [
   }),
 ];
 
-// Ajouter les transports fichier en production
-if (config.isProduction || config.isDevelopment) {
+// Ajouter les transports fichier (sauf en serverless Vercel)
+const isServerless = !!process.env.VERCEL || !!process.env.AWS_LAMBDA_FUNCTION_NAME;
+if (!isServerless && (config.isProduction || config.isDevelopment)) {
   transports.push(
     // Tous les logs
     new winston.transports.File({

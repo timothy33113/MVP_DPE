@@ -1,8 +1,8 @@
 {
-  "buildCommand": "cd packages/frontend && pnpm install && pnpm build",
+  "buildCommand": "pnpm --filter @dpe-matching/frontend build",
   "outputDirectory": "packages/frontend/dist",
-  "installCommand": "pnpm install",
-  "framework": "vite",
+  "installCommand": "pnpm install --no-frozen-lockfile",
+  "framework": null,
   "functions": {
     "api/**/*.ts": {
       "maxDuration": 60

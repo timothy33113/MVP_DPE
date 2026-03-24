@@ -1,0 +1,11 @@
+src/
+dist/
+scripts/
+*.ts
+!api/
+tsconfig.json
+tsconfig.paths.json
+jest.config.ts
+.env
+.env.*
+node_modules/
